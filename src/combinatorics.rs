@@ -17,7 +17,7 @@ impl RollCounts {
     /// RollCounts <-> [0..C(10)(5)].
     ///
     /// * `roll_counts` - The dice roll multiset.
-    pub fn rank_dice_multiset(&self) -> usize {
+    pub fn rank(&self) -> usize {
         let mut rank: usize = 0;
         let mut dice_remaining: usize = RollCounts::NUM_DICE as usize;
         for face in 0..(RollCounts::NUM_DICE as usize) {
@@ -176,13 +176,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rank_dice_multiset_is_bijection() {
+    fn rank_is_bijection() {
         let mut rank_to_roll_counts: [Option<RollCounts>; DISTINCT_ROLL_COUNTS] =
             [None; DISTINCT_ROLL_COUNTS];
         for distinct_roll in DISTINCT_ROLLS {
             let roll_counts = RollCounts::try_from(distinct_roll)
                 .expect("These were created in such a way that they should all be valid.");
-            let rank = roll_counts.rank_dice_multiset();
+            let rank = roll_counts.rank();
             if rank_to_roll_counts[rank] == None {
                 rank_to_roll_counts[rank] = Some(roll_counts);
                 continue;
@@ -192,14 +192,14 @@ mod tests {
             }
             assert!(
                 false,
-                "rank_dice_multiset not injective: {:#?} collided with {:#?} at rank {}.",
+                "rank not injective: {:#?} collided with {:#?} at rank {}.",
                 roll_counts, rank_to_roll_counts[rank], rank
             );
         }
         // Loop has ended => No collisions (injective). Now we check that every rank is assigned a roll count (surjective).
         assert!(
             !rank_to_roll_counts.iter().any(|&x| x == None),
-            "rank_dice_multiset not surjective: {:#?}",
+            "rank not surjective: {:#?}",
             rank_to_roll_counts
         );
     }

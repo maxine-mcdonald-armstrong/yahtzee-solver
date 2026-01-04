@@ -12,7 +12,7 @@ use types::{
     DiceState, JokerRule, KeepCounts, RollCounts, RollsLeft, ScoreCategory, ScorecardState,
 };
 
-static ROLL_PROBABILITIES: LazyLock<VecMemo<KeepCounts, Vec<(RollCounts, f64)>>> =
+static ROLL_PROBABILITIES: LazyLock<VecMemo<KeepCounts, Vec<(usize, f64)>>> =
     LazyLock::new(|| precompute_roll_probabilities_vec());
 
 /// Allows me to easily swap out different memo implementations for the DP.
@@ -94,6 +94,20 @@ impl<K: IndexKey, V> VecMemo<K, V> {
             _phantom: PhantomData,
         }
     }
+
+    fn raw_get(&self, key: usize) -> Option<&V> {
+        self.memo[key].as_ref()
+    }
+
+    fn raw_set(&mut self, key: usize, value: V) -> Option<V> {
+        let prev = self.memo[key].take();
+        self.memo[key] = Some(value);
+        prev
+    }
+
+    fn raw_remove(&mut self, key: usize) -> Option<V> {
+        self.memo[key].take()
+    }
 }
 
 impl Memo<ScorecardState, f64> for MockScorecardMemo {
@@ -114,7 +128,7 @@ impl IndexKey for DiceState {
     /// We use stars-and-bars to give each roll a unique number on [0..252], and then consider
     /// rolls_left which is on [0..3].
     fn to_index(&self) -> usize {
-        let rank = self.roll_counts.rank_dice_multiset();
+        let rank = self.roll_counts.rank();
         rank * (RollsLeft::MAX as usize + 1) + *self.rolls_left.rolls_left() as usize
     }
 
@@ -140,21 +154,21 @@ impl IndexKey for KeepCounts {
 }
 
 impl KeepCounts {
-    /// For these dice kept, all possible rollcounts as a result of rerolling and their
+    /// For these dice kept, the rank of all possible rollcounts as a result of rerolling and their
     /// probabilities.
-    fn roll_probabilities(&self) -> Vec<(RollCounts, f64)> {
-        let mut vec: Vec<(RollCounts, f64)> = Vec::new();
+    fn roll_probabilities(&self) -> Vec<(usize, f64)> {
+        let mut vec: Vec<(usize, f64)> = Vec::new();
         for raw_target_roll_counts in DISTINCT_ROLLS {
             let target_roll_counts = RollCounts::try_from(raw_target_roll_counts).unwrap();
             let p = target_roll_counts.p_roll_given_keep(&self);
-            vec.push((target_roll_counts, p));
+            vec.push((target_roll_counts.rank(), p));
         }
         vec
     }
 }
 
-fn precompute_roll_probabilities_vec() -> VecMemo<KeepCounts, Vec<(RollCounts, f64)>> {
-    let mut memo: VecMemo<KeepCounts, Vec<(RollCounts, f64)>> = VecMemo::new();
+fn precompute_roll_probabilities_vec() -> VecMemo<KeepCounts, Vec<(usize, f64)>> {
+    let mut memo: VecMemo<KeepCounts, Vec<(usize, f64)>> = VecMemo::new();
     for raw_keep_counts in DISTINCT_KEEPS {
         let keep_counts = KeepCounts::try_from(raw_keep_counts).unwrap();
         let roll_probabilities = keep_counts.roll_probabilities();
@@ -243,14 +257,11 @@ fn dice_dp<S: Memo<ScorecardState, f64>>(
             for keep_counts in roll_counts.valid_keep_counts() {
                 // calculate the EV of following that transition
                 let mut ev = 0f64;
-                for (target_roll_counts, p) in ROLL_PROBABILITIES.get(&keep_counts).unwrap() {
-                    let target_rolls_left = RollsLeft::try_from(raw_rolls_left - 1)
-                        .expect("We're iterating from 1.., so this is safe.");
-                    let target_dice_state = DiceState {
-                        roll_counts: target_roll_counts.clone(),
-                        rolls_left: target_rolls_left,
-                    };
-                    ev = ev + p * ev_memo.get(&target_dice_state).copied().expect("Our dice DP is working backwards, so every valid transition must be accounted for.");
+                for (target_roll_counts_rank, p) in ROLL_PROBABILITIES.get(&keep_counts).unwrap() {
+                    let target_rolls_left = (raw_rolls_left - 1) as usize;
+                    let memo_idx =
+                        target_roll_counts_rank * (RollsLeft::MAX as usize + 1) + target_rolls_left;
+                    ev = ev + p * ev_memo.raw_get(memo_idx).copied().expect("Our dice DP is working backwards, so every valid transition must be accounted for.");
                 }
                 if ev > best_ev {
                     best_ev = ev;
@@ -283,5 +294,5 @@ fn profile_dice_dp(n_runs: u32) {
 }
 
 fn main() {
-    profile_dice_dp(100);
+    profile_dice_dp(1);
 }
