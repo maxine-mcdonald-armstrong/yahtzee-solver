@@ -2,8 +2,15 @@ use crate::types::{KeepCounts, RollCounts, SubtractionError};
 
 pub const DISTINCT_ROLL_COUNTS: usize =
     BINOM[RollCounts::NUM_DICE + RollCounts::NUM_FACES - 1][RollCounts::NUM_FACES - 1];
+pub const DISTINCT_YAHTZEE_ROLL_COUNTS: usize = RollCounts::NUM_FACES;
+pub const DISTINCT_NON_YAHTZEE_ROLL_COUNTS: usize =
+    DISTINCT_ROLL_COUNTS - DISTINCT_YAHTZEE_ROLL_COUNTS;
 pub const DISTINCT_ROLLS: [[u8; RollCounts::NUM_FACES]; DISTINCT_ROLL_COUNTS] =
     make_distinct_rolls();
+pub const DISTINCT_NON_YAHTZEE_ROLLS: [[u8; RollCounts::NUM_FACES];
+    DISTINCT_NON_YAHTZEE_ROLL_COUNTS] = make_distinct_non_yahtzee_rolls();
+pub const DISTINCT_YAHTZEE_ROLLS: [[u8; RollCounts::NUM_FACES]; DISTINCT_YAHTZEE_ROLL_COUNTS] =
+    make_distinct_yahtzee_rolls();
 pub const DISTINCT_KEEP_COUNTS: usize = compute_distinct_keep_counts();
 pub const DISTINCT_KEEPS: [[u8; RollCounts::NUM_FACES]; DISTINCT_KEEP_COUNTS] =
     make_distinct_keeps();
@@ -111,7 +118,7 @@ const fn compute_distinct_keep_counts() -> usize {
 
 /// We cannot return checked RollCount objects as that's not const.
 const fn make_distinct_rolls() -> [[u8; RollCounts::NUM_FACES]; DISTINCT_ROLL_COUNTS] {
-    let mut distinct_rolls = [[RollCounts::NUM_DICE as u8, 0, 0, 0, 0, 0]; DISTINCT_ROLL_COUNTS];
+    let mut distinct_rolls = [[0, 0, 0, 0, 0, 0]; DISTINCT_ROLL_COUNTS];
     let mut i = 0;
     let mut c0 = 0u8;
     while c0 <= RollCounts::NUM_DICE as u8 {
@@ -169,6 +176,45 @@ const fn make_distinct_keeps() -> [[u8; RollCounts::NUM_FACES]; DISTINCT_KEEP_CO
         c0 += 1;
     }
     distinct_keeps
+}
+
+const fn make_distinct_non_yahtzee_rolls()
+-> [[u8; RollCounts::NUM_FACES]; DISTINCT_NON_YAHTZEE_ROLL_COUNTS] {
+    let mut distinct_non_yahtzee_rolls = [[0, 0, 0, 0, 0, 0]; DISTINCT_NON_YAHTZEE_ROLL_COUNTS];
+    let mut distinct_rolls_it = 0usize;
+    let mut i = 0usize;
+    while distinct_rolls_it < DISTINCT_ROLL_COUNTS {
+        if !is_yahtzee(&DISTINCT_ROLLS[distinct_rolls_it]) {
+            distinct_non_yahtzee_rolls[i] = DISTINCT_ROLLS[distinct_rolls_it];
+            i += 1;
+        }
+        distinct_rolls_it += 1;
+    }
+    distinct_non_yahtzee_rolls
+}
+
+const fn make_distinct_yahtzee_rolls() -> [[u8; RollCounts::NUM_FACES]; DISTINCT_YAHTZEE_ROLL_COUNTS]
+{
+    let mut distinct_yahtzee_rolls = [[0, 0, 0, 0, 0, 0]; DISTINCT_YAHTZEE_ROLL_COUNTS];
+    let mut i = 0usize;
+    while i < RollCounts::NUM_FACES {
+        let mut roll = [0, 0, 0, 0, 0, 0];
+        roll[i] = RollCounts::NUM_DICE as u8;
+        distinct_yahtzee_rolls[i] = roll;
+        i += 1;
+    }
+    distinct_yahtzee_rolls
+}
+
+const fn is_yahtzee(roll_counts: &[u8; RollCounts::NUM_FACES]) -> bool {
+    let mut i = 0usize;
+    while i < RollCounts::NUM_FACES {
+        if roll_counts[i] == RollCounts::NUM_DICE as u8 {
+            return true;
+        }
+        i += 1;
+    }
+    false
 }
 
 #[cfg(test)]

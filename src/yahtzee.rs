@@ -14,19 +14,25 @@ impl ScorecardState {
         &self,
         roll: &RollCounts,
         joker_rule: JokerRule,
-    ) -> Box<dyn Iterator<Item = ScoreCategory> + '_> {
+    ) -> Vec<ScoreCategory> {
         if let Some(yahtzee_category) = roll.is_yahtzee()
             && joker_rule == JokerRule::Forced
             && self.score_category_state()[yahtzee_category] == ScoreCategoryState::Unscored
         {
-            return Box::new(std::iter::once(yahtzee_category));
+            return vec![yahtzee_category];
         }
         // aside from this special case, every roll is scorable in every category. It may just
         // score 0 points.
-        Box::new(
-            ScoreCategory::iter()
-                .filter(|&x| self.score_category_state()[x] == ScoreCategoryState::Unscored),
-        )
+        ScoreCategory::iter()
+            .filter(|&x| self.score_category_state()[x] == ScoreCategoryState::Unscored)
+            .collect()
+    }
+
+    /// All valid score categories if the roll is not a yahtzee.
+    pub fn valid_non_yahtzee_score_categories(&self) -> Vec<ScoreCategory> {
+        ScoreCategory::iter()
+            .filter(|&x| self.score_category_state()[x] == ScoreCategoryState::Unscored)
+            .collect()
     }
 
     /// Returns (category_score, bonus_score) where category score is the base score, and bonus

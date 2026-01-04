@@ -2,7 +2,10 @@ pub mod combinatorics;
 pub mod types;
 pub mod yahtzee;
 
-use combinatorics::{DISTINCT_KEEPS, DISTINCT_ROLL_COUNTS, DISTINCT_ROLLS};
+use combinatorics::{
+    DISTINCT_KEEPS, DISTINCT_NON_YAHTZEE_ROLLS, DISTINCT_ROLL_COUNTS, DISTINCT_ROLLS,
+    DISTINCT_YAHTZEE_ROLLS,
+};
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::marker::PhantomData;
@@ -220,12 +223,48 @@ pub fn dice_dp<S: Memo<ScorecardState, f64>>(
 ) {
     let mut ev_memo: VecMemo<DiceState, f64> = VecMemo::new();
     let mut policy_memo: VecMemo<DiceState, &KeepCounts> = VecMemo::new();
+    let valid_non_yahtzee_score_categories = scorecard_state.valid_non_yahtzee_score_categories();
     // initialise memo with all transitions out of this scorecard_state
-    for raw_roll_counts in DISTINCT_ROLLS {
-        let roll_counts = RollCounts::try_from(raw_roll_counts).expect("DISTINCT_ROLLS returns all valid roll counts, but due to its const implementation needs to be coerced at runtime.");
+    // the non-yahtzee score categories have simpler rules which can be precomputed
+    for raw_non_yahtzee_roll_counts in DISTINCT_NON_YAHTZEE_ROLLS {
+        let roll_counts = RollCounts::try_from(raw_non_yahtzee_roll_counts).unwrap();
         for raw_rolls_left in 0..=RollsLeft::MAX {
-            let rolls_left = RollsLeft::try_from(raw_rolls_left)
-                .expect("We took care to iterate only over valid values.");
+            let rolls_left = RollsLeft::try_from(raw_rolls_left).unwrap();
+            let dice_state = DiceState {
+                roll_counts: roll_counts,
+                rolls_left: rolls_left,
+            };
+            // for each direct transition, the EV is the immediate score + the EV of that
+            // transition.
+            let mut best_ev = 0f64;
+            for &score_category in &valid_non_yahtzee_score_categories {
+                let (category_score, bonus_score) = scorecard_state
+                    .score_value(&roll_counts, score_category, joker_rule)
+                    .expect("We are iterating through valid categories.");
+                let target_scorecard_state = scorecard_state
+                    .score(score_category, category_score)
+                    .expect("This is a valid score category.");
+                let transition_ev = if !target_scorecard_state.is_terminal() {
+                    scorecard_memo
+                        .get(&target_scorecard_state
+                        )
+                        .copied()
+                        .expect("Our scorecard DP is working backwards, so every valid transition must be accounted for.")
+                } else {
+                    0f64
+                };
+                let total_ev = (category_score + bonus_score) as f64 + transition_ev;
+                if total_ev > best_ev {
+                    best_ev = total_ev;
+                }
+            }
+            ev_memo.set(dice_state, best_ev);
+        }
+    }
+    for raw_yahtzee_roll_counts in DISTINCT_YAHTZEE_ROLLS {
+        let roll_counts = RollCounts::try_from(raw_yahtzee_roll_counts).unwrap();
+        for raw_rolls_left in 0..=RollsLeft::MAX {
+            let rolls_left = RollsLeft::try_from(raw_rolls_left).unwrap();
             let dice_state = DiceState {
                 roll_counts: roll_counts,
                 rolls_left: rolls_left,
@@ -255,8 +294,6 @@ pub fn dice_dp<S: Memo<ScorecardState, f64>>(
                 }
             }
             ev_memo.set(dice_state, best_ev);
-            // for our policy memo, an element not being in it means that the optimal policy is
-            // scoring that dice state.
         }
     }
     // Note that since every state is a potential terminal state (we can choose to score our dice
