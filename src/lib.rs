@@ -14,6 +14,8 @@ use types::{
 
 static ROLL_PROBABILITIES: LazyLock<VecMemo<KeepCounts, Vec<(usize, f64)>>> =
     LazyLock::new(|| precompute_roll_probabilities_vec());
+static VALID_KEEP_COUNTS: LazyLock<VecMemo<RollCounts, Vec<KeepCounts>>> =
+    LazyLock::new(|| precompute_valid_keep_counts_vec());
 
 /// Allows me to easily swap out different memo implementations for the DP.
 ///
@@ -137,6 +139,16 @@ impl IndexKey for DiceState {
     }
 }
 
+impl IndexKey for RollCounts {
+    fn to_index(&self) -> usize {
+        self.rank()
+    }
+
+    fn max_index() -> usize {
+        DISTINCT_ROLL_COUNTS - 1
+    }
+}
+
 impl IndexKey for KeepCounts {
     /// These indices are very sparsely distributed, so this should be used with caution.
     fn to_index(&self) -> usize {
@@ -177,6 +189,16 @@ fn precompute_roll_probabilities_vec() -> VecMemo<KeepCounts, Vec<(usize, f64)>>
     memo
 }
 
+fn precompute_valid_keep_counts_vec() -> VecMemo<RollCounts, Vec<KeepCounts>> {
+    let mut memo: VecMemo<RollCounts, Vec<KeepCounts>> = VecMemo::new();
+    for raw_roll_counts in DISTINCT_ROLLS {
+        let roll_counts = RollCounts::try_from(raw_roll_counts).unwrap();
+        let valid_keep_counts = roll_counts.valid_keep_counts();
+        memo.set(roll_counts, valid_keep_counts);
+    }
+    memo
+}
+
 /// Finds the EV of the given scorecard state. Does this by solving a finite-horizon MDP TC. Also
 /// returns the optimal policy from any dice state given this scorecard state, because it's
 /// annoying to recreate from the EV memo.
@@ -192,9 +214,12 @@ pub fn dice_dp<S: Memo<ScorecardState, f64>>(
     scorecard_state: &ScorecardState,
     scorecard_memo: &S,
     joker_rule: JokerRule,
-) -> (impl Memo<DiceState, f64>, impl Memo<DiceState, KeepCounts>) {
+) -> (
+    impl Memo<DiceState, f64>,
+    impl Memo<DiceState, &'static KeepCounts>,
+) {
     let mut ev_memo: VecMemo<DiceState, f64> = VecMemo::new();
-    let mut policy_memo: VecMemo<DiceState, KeepCounts> = VecMemo::new();
+    let mut policy_memo: VecMemo<DiceState, &KeepCounts> = VecMemo::new();
     // initialise memo with all transitions out of this scorecard_state
     for raw_roll_counts in DISTINCT_ROLLS {
         let roll_counts = RollCounts::try_from(raw_roll_counts).expect("DISTINCT_ROLLS returns all valid roll counts, but due to its const implementation needs to be coerced at runtime.");
@@ -252,12 +277,12 @@ pub fn dice_dp<S: Memo<ScorecardState, f64>>(
                 .get(&dice_state)
                 .copied()
                 .expect("We initialized the memo with every possible dicestate");
-            let mut best_transition: Option<KeepCounts> = None;
+            let mut best_transition: Option<&KeepCounts> = None;
             // over all possible dice transitions (keep_counts)...
-            for keep_counts in roll_counts.valid_keep_counts() {
+            for keep_counts in VALID_KEEP_COUNTS.get(&roll_counts).unwrap() {
                 // calculate the EV of following that transition
                 let mut ev = 0f64;
-                for (target_roll_counts_rank, p) in ROLL_PROBABILITIES.get(&keep_counts).unwrap() {
+                for (target_roll_counts_rank, p) in ROLL_PROBABILITIES.get(keep_counts).unwrap() {
                     let target_rolls_left = (raw_rolls_left - 1) as usize;
                     let memo_idx =
                         target_roll_counts_rank * (RollsLeft::MAX as usize + 1) + target_rolls_left;

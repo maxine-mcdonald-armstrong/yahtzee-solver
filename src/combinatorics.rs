@@ -32,7 +32,7 @@ impl RollCounts {
         rank
     }
 
-    pub fn valid_keep_counts(&self) -> impl Iterator<Item = KeepCounts> {
+    pub fn valid_keep_counts(&self) -> Vec<KeepCounts> {
         let mut valid_keep_counts = Vec::new();
         for k0 in 0..=self.roll_counts()[0] {
             for k1 in 0..=self.roll_counts()[1] {
@@ -50,7 +50,7 @@ impl RollCounts {
                 }
             }
         }
-        valid_keep_counts.into_iter()
+        valid_keep_counts
     }
 
     pub fn p_roll(&self) -> f64 {
@@ -259,9 +259,6 @@ mod tests {
             KeepCounts::try_from([4, 0, 0, 0, 0, 0]).unwrap(),
             KeepCounts::try_from([5, 0, 0, 0, 0, 0]).unwrap(),
         ];
-        assert_eq!(
-            expected,
-            roll_counts.valid_keep_counts().collect::<Vec<KeepCounts>>()
-        );
+        assert_eq!(expected, roll_counts.valid_keep_counts());
     }
 }
