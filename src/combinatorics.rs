@@ -1,10 +1,12 @@
 use crate::types::{KeepCounts, RollCounts, SubtractionError};
-use num_traits::abs;
 
 pub const DISTINCT_ROLL_COUNTS: usize =
     BINOM[RollCounts::NUM_DICE + RollCounts::NUM_FACES - 1][RollCounts::NUM_FACES - 1];
 pub const DISTINCT_ROLLS: [[u8; RollCounts::NUM_FACES]; DISTINCT_ROLL_COUNTS] =
     make_distinct_rolls();
+pub const DISTINCT_KEEP_COUNTS: usize = compute_distinct_keep_counts();
+pub const DISTINCT_KEEPS: [[u8; RollCounts::NUM_FACES]; DISTINCT_KEEP_COUNTS] =
+    make_distinct_keeps();
 
 const MAX: usize = RollCounts::NUM_DICE + RollCounts::NUM_FACES;
 
@@ -51,13 +53,13 @@ impl RollCounts {
         valid_keep_counts.into_iter()
     }
 
-    pub fn p_roll<T: num_traits::Float>(&self) -> T {
-        self.p_roll_given_keep::<T>(&KeepCounts::try_from([0, 0, 0, 0, 0, 0]).unwrap())
+    pub fn p_roll(&self) -> f64 {
+        self.p_roll_given_keep(&KeepCounts::try_from([0, 0, 0, 0, 0, 0]).unwrap())
     }
 
-    pub fn p_roll_given_keep<T: num_traits::Float>(&self, keep_counts: &KeepCounts) -> T {
+    pub fn p_roll_given_keep(&self, keep_counts: &KeepCounts) -> f64 {
         let Ok(to_reroll) = self.subtract(keep_counts) else {
-            return T::from(0).unwrap();
+            return 0f64;
         };
         let n_to_reroll = to_reroll.keep_counts().iter().sum::<u8>() as usize;
         let mut denominator: usize = 1;
@@ -66,9 +68,7 @@ impl RollCounts {
         }
         denominator *= (RollCounts::NUM_FACES as usize).pow(n_to_reroll as u32);
         let numerator = factorial(n_to_reroll);
-        let p = T::from(numerator)
-            .expect("This will not fail in the game of Yahtzee. The numbers are too small.")
-            / T::from(denominator).unwrap();
+        let p = numerator as f64 / denominator as f64;
         p
     }
 }
@@ -99,6 +99,16 @@ const fn make_binom() -> [[usize; MAX]; MAX] {
     binom
 }
 
+const fn compute_distinct_keep_counts() -> usize {
+    let mut counts = 0usize;
+    let mut n_kept = 0usize;
+    while n_kept <= RollCounts::NUM_DICE {
+        counts += BINOM[n_kept + RollCounts::NUM_FACES - 1][n_kept];
+        n_kept += 1;
+    }
+    counts
+}
+
 /// We cannot return checked RollCount objects as that's not const.
 const fn make_distinct_rolls() -> [[u8; RollCounts::NUM_FACES]; DISTINCT_ROLL_COUNTS] {
     let mut distinct_rolls = [[RollCounts::NUM_DICE as u8, 0, 0, 0, 0, 0]; DISTINCT_ROLL_COUNTS];
@@ -127,6 +137,38 @@ const fn make_distinct_rolls() -> [[u8; RollCounts::NUM_FACES]; DISTINCT_ROLL_CO
         c0 += 1;
     }
     distinct_rolls
+}
+
+const fn make_distinct_keeps() -> [[u8; RollCounts::NUM_FACES]; DISTINCT_KEEP_COUNTS] {
+    let mut distinct_keeps = [[0, 0, 0, 0, 0, 0]; DISTINCT_KEEP_COUNTS];
+    let mut i = 0;
+    let mut c0 = 0u8;
+    while c0 <= RollCounts::NUM_DICE as u8 {
+        let mut c1 = 0u8;
+        while c0 + c1 <= RollCounts::NUM_DICE as u8 {
+            let mut c2 = 0u8;
+            while c0 + c1 + c2 <= RollCounts::NUM_DICE as u8 {
+                let mut c3 = 0u8;
+                while c0 + c1 + c2 + c3 <= RollCounts::NUM_DICE as u8 {
+                    let mut c4 = 0u8;
+                    while c0 + c1 + c2 + c3 + c4 <= RollCounts::NUM_DICE as u8 {
+                        let mut c5 = 0u8;
+                        while c0 + c1 + c2 + c3 + c4 + c5 <= RollCounts::NUM_DICE as u8 {
+                            distinct_keeps[i] = [c0, c1, c2, c3, c4, c5];
+                            c5 += 1;
+                            i += 1;
+                        }
+                        c4 += 1;
+                    }
+                    c3 += 1;
+                }
+                c2 += 1;
+            }
+            c1 += 1;
+        }
+        c0 += 1;
+    }
+    distinct_keeps
 }
 
 #[cfg(test)]
@@ -172,14 +214,14 @@ mod tests {
         ];
         for (roll, expected) in cases {
             let roll_counts = RollCounts::try_from(roll).unwrap();
-            let p = roll_counts.p_roll::<f64>();
+            let p = roll_counts.p_roll();
             assert!(
-                abs(p - expected) < f64::EPSILON,
+                (p - expected).abs() < f64::EPSILON,
                 "Calculated p={}, expected p={}, difference larger than epsilon {} at {}.",
                 p,
                 expected,
                 f64::EPSILON,
-                abs(p - expected)
+                (p - expected).abs()
             );
         }
     }
@@ -194,14 +236,14 @@ mod tests {
         for (roll, keep, expected) in cases {
             let roll_counts = RollCounts::try_from(roll).unwrap();
             let keep_counts = KeepCounts::try_from(keep).unwrap();
-            let p = roll_counts.p_roll_given_keep::<f64>(&keep_counts);
+            let p = roll_counts.p_roll_given_keep(&keep_counts);
             assert!(
-                abs(p - expected) < f64::EPSILON,
+                (p - expected).abs() < f64::EPSILON,
                 "Calculated p={}, expected p={}, difference larger than epsilon {} at {}.",
                 p,
                 expected,
                 f64::EPSILON,
-                abs(p - expected)
+                (p - expected).abs()
             );
         }
     }

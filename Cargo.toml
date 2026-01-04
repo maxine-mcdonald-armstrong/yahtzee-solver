@@ -5,6 +5,5 @@ edition = "2024"
 
 [dependencies]
 enum-map = "2.7.3"
-num-traits = "0.2.19"
 strum = "0.27.2"
 strum_macros = "0.27.2"

@@ -2,14 +2,18 @@ mod combinatorics;
 mod types;
 mod yahtzee;
 
-use combinatorics::{DISTINCT_ROLL_COUNTS, DISTINCT_ROLLS};
+use combinatorics::{DISTINCT_KEEPS, DISTINCT_ROLL_COUNTS, DISTINCT_ROLLS};
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::marker::PhantomData;
+use std::sync::LazyLock;
 use strum::IntoEnumIterator;
 use types::{
     DiceState, JokerRule, KeepCounts, RollCounts, RollsLeft, ScoreCategory, ScorecardState,
 };
+
+static ROLL_PROBABILITIES: LazyLock<VecMemo<KeepCounts, Vec<(RollCounts, f64)>>> =
+    LazyLock::new(|| precompute_roll_probabilities_vec());
 
 /// Allows me to easily swap out different memo implementations for the DP.
 ///
@@ -38,6 +42,9 @@ struct VecMemo<K, V> {
     memo: Vec<Option<V>>,
     _phantom: PhantomData<K>,
 }
+
+/// Used for profiling dice_dp
+struct MockScorecardMemo();
 
 impl<K: Eq + Hash, V> Memo<K, V> for MapMemo<K, V> {
     fn get(&self, key: &K) -> Option<&V> {
@@ -79,13 +86,27 @@ impl<K: IndexKey, V> Memo<K, V> for VecMemo<K, V> {
 
 impl<K: IndexKey, V> VecMemo<K, V> {
     fn new() -> Self {
-        let size = K::max_index();
+        let size = K::max_index() + 1;
         let mut vec = Vec::with_capacity(size);
         vec.resize_with(size, || None);
         Self {
             memo: vec,
             _phantom: PhantomData,
         }
+    }
+}
+
+impl Memo<ScorecardState, f64> for MockScorecardMemo {
+    fn get(&self, key: &ScorecardState) -> Option<&f64> {
+        Some(&10f64)
+    }
+
+    fn set(&mut self, key: ScorecardState, value: f64) -> Option<f64> {
+        Some(10f64)
+    }
+
+    fn remove(&mut self, key: &ScorecardState) -> Option<f64> {
+        Some(10f64)
     }
 }
 
@@ -98,8 +119,48 @@ impl IndexKey for DiceState {
     }
 
     fn max_index() -> usize {
-        DISTINCT_ROLL_COUNTS * (RollsLeft::MAX as usize + 1)
+        DISTINCT_ROLL_COUNTS * (RollsLeft::MAX as usize + 1) - 1
     }
+}
+
+impl IndexKey for KeepCounts {
+    /// These indices are very sparsely distributed, so this should be used with caution.
+    fn to_index(&self) -> usize {
+        let mut rank = 0usize;
+        for &c in self.keep_counts() {
+            rank *= 5;
+            rank += c as usize;
+        }
+        rank
+    }
+
+    fn max_index() -> usize {
+        5usize.pow(6)
+    }
+}
+
+impl KeepCounts {
+    /// For these dice kept, all possible rollcounts as a result of rerolling and their
+    /// probabilities.
+    fn roll_probabilities(&self) -> Vec<(RollCounts, f64)> {
+        let mut vec: Vec<(RollCounts, f64)> = Vec::new();
+        for raw_target_roll_counts in DISTINCT_ROLLS {
+            let target_roll_counts = RollCounts::try_from(raw_target_roll_counts).unwrap();
+            let p = target_roll_counts.p_roll_given_keep(&self);
+            vec.push((target_roll_counts, p));
+        }
+        vec
+    }
+}
+
+fn precompute_roll_probabilities_vec() -> VecMemo<KeepCounts, Vec<(RollCounts, f64)>> {
+    let mut memo: VecMemo<KeepCounts, Vec<(RollCounts, f64)>> = VecMemo::new();
+    for raw_keep_counts in DISTINCT_KEEPS {
+        let keep_counts = KeepCounts::try_from(raw_keep_counts).unwrap();
+        let roll_probabilities = keep_counts.roll_probabilities();
+        memo.set(keep_counts, roll_probabilities);
+    }
+    memo
 }
 
 /// Finds the EV of the given scorecard state. Does this by solving a finite-horizon MDP TC. Also
@@ -113,12 +174,12 @@ impl IndexKey for DiceState {
 /// * `initial_value` - A value of type V to initialize the optimisation on. This should be the
 /// minimal possible V, for example 0.0 for Yahtzee (as negative scores are impossible).
 /// * `scorecard_memo` - The current memo of ScorecardState -> V.
-fn dice_dp<V: num_traits::Float, S: Memo<ScorecardState, V>>(
+fn dice_dp<S: Memo<ScorecardState, f64>>(
     scorecard_state: &ScorecardState,
     scorecard_memo: &S,
     joker_rule: JokerRule,
-) -> (impl Memo<DiceState, V>, impl Memo<DiceState, KeepCounts>) {
-    let mut ev_memo: VecMemo<DiceState, V> = VecMemo::new();
+) -> (impl Memo<DiceState, f64>, impl Memo<DiceState, KeepCounts>) {
+    let mut ev_memo: VecMemo<DiceState, f64> = VecMemo::new();
     let mut policy_memo: VecMemo<DiceState, KeepCounts> = VecMemo::new();
     // initialise memo with all transitions out of this scorecard_state
     for raw_roll_counts in DISTINCT_ROLLS {
@@ -132,7 +193,7 @@ fn dice_dp<V: num_traits::Float, S: Memo<ScorecardState, V>>(
             };
             // for each direct transition, the EV is the immediate score + the EV of that
             // transition.
-            let mut best_ev = V::zero();
+            let mut best_ev = 0f64;
             for score_category in scorecard_state.valid_score_categories(&roll_counts, joker_rule) {
                 let (category_score, bonus_score) = scorecard_state
                     .score_value(&roll_counts, score_category, joker_rule)
@@ -147,9 +208,9 @@ fn dice_dp<V: num_traits::Float, S: Memo<ScorecardState, V>>(
                         .copied()
                         .expect("Our scorecard DP is working backwards, so every valid transition must be accounted for.")
                 } else {
-                    V::zero()
+                    0f64
                 };
-                let total_ev = V::from(category_score + bonus_score).unwrap() + transition_ev;
+                let total_ev = (category_score + bonus_score) as f64 + transition_ev;
                 if total_ev > best_ev {
                     best_ev = total_ev;
                 }
@@ -170,22 +231,23 @@ fn dice_dp<V: num_traits::Float, S: Memo<ScorecardState, V>>(
                 roll_counts: roll_counts,
                 rolls_left: rolls_left,
             };
-            // over all possible dice transitions (keep_counts)...
+            // The following ensures we choose to score prematurely if it's optimal. It is what
+            // necessitates the earlier loop that calculates the EV of scoring each possible dice
+            // state.
             let mut best_ev = ev_memo
                 .get(&dice_state)
                 .copied()
                 .expect("We initialized the memo with every possible dicestate");
             let mut best_transition: Option<KeepCounts> = None;
+            // over all possible dice transitions (keep_counts)...
             for keep_counts in roll_counts.valid_keep_counts() {
                 // calculate the EV of following that transition
-                let mut ev = V::zero();
-                for raw_target_roll_counts in DISTINCT_ROLLS {
-                    let target_roll_counts = RollCounts::try_from(raw_target_roll_counts).unwrap();
+                let mut ev = 0f64;
+                for (target_roll_counts, p) in ROLL_PROBABILITIES.get(&keep_counts).unwrap() {
                     let target_rolls_left = RollsLeft::try_from(raw_rolls_left - 1)
                         .expect("We're iterating from 1.., so this is safe.");
-                    let p = target_roll_counts.p_roll_given_keep::<V>(&keep_counts);
                     let target_dice_state = DiceState {
-                        roll_counts: target_roll_counts,
+                        roll_counts: target_roll_counts.clone(),
                         rolls_left: target_rolls_left,
                     };
                     ev = ev + p * ev_memo.get(&target_dice_state).copied().expect("Our dice DP is working backwards, so every valid transition must be accounted for.");
@@ -205,22 +267,21 @@ fn dice_dp<V: num_traits::Float, S: Memo<ScorecardState, V>>(
 }
 
 /// Builds the scorecard DP memo from ScorecardState -> EV.
-fn scorecard_dp<V: num_traits::Float>() -> impl Memo<ScorecardState, V> {
-    let mut memo: MapMemo<ScorecardState, V> = MapMemo::default();
+fn scorecard_dp() -> impl Memo<ScorecardState, f64> {
+    let mut memo: MapMemo<ScorecardState, f64> = MapMemo::default();
     todo!();
     memo
 }
 
-fn main() {
-    let mut scorecard_state = ScorecardState::default();
-    for score_category in ScoreCategory::iter() {
-        if score_category == ScoreCategory::Yahtzee {
-            continue;
-        }
-        scorecard_state = scorecard_state.score(score_category, 0).unwrap();
+fn profile_dice_dp(n_runs: u32) {
+    for _ in 0..n_runs {
+        let scorecard_state = ScorecardState::default();
+        let scorecard_memo = MockScorecardMemo();
+        let joker_rule = JokerRule::FreeChoice;
+        dice_dp(&scorecard_state, &scorecard_memo, joker_rule);
     }
-    let scorecard_memo = MapMemo::<ScorecardState, f64>::default();
-    let joker_rule = JokerRule::FreeChoice;
-    let (ev_memo, policy_memo) = dice_dp(&scorecard_state, &scorecard_memo, joker_rule);
-    println!("Hello, world!");
+}
+
+fn main() {
+    profile_dice_dp(100);
 }
